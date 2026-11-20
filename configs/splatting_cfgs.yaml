@@ -1,0 +1,60 @@
+# Strand-Surfels training configuration.
+#
+# Every entry can be overridden on the command line by its dotted name, e.g.
+# `--optimization.iterations 30000`. The settings of the hair labels (a later
+# addition) are not listed here; see the `labels` section of a run's
+# config.yaml and strand_surfels/losses/labels.py for their defaults.
+
+# dataset
+images_dir: "image"  # folder of the input images in the dataset
+images_resolution: 1  # downscale factor of the images
+calibration_json_file: "calibration"  # camera file in the dataset (without .json)
+
+optimization:
+  sh_degree: 3
+  iterations: 15_000
+
+  # learning rates; positions decay exponentially, scaled by the scene extent
+  position_lr_init: 0.000016
+  position_lr_final: 0.0000016
+  position_lr_delay_mult: 0.01
+  position_lr_max_steps: 15_000
+  feature_lr: 0.0025
+  opacity_lr: 0.05
+  scaling_lr: 0.005
+  rotation_lr: 0.001
+
+  # densification (Taming 3DGS budget, Revising Densification opacities)
+  densify_from_iter: 500
+  densify_until_iter: 8_000
+  densification_interval: 100
+  final_splat_budget: 1_000_000  # surfel budget at densify_until_iter
+  max_per_splat_error: 0.000001  # minimum score of densification candidates
+  percent_dense: 0.0002  # larger surfels (relative to the scene extent) are split, smaller cloned
+  min_opacity_to_prune: 0.05
+  opacity_reset_interval: 3000  # no resets; after this iteration surfels too large are pruned
+
+  # losses; each weight is zero up to its _start_iter
+  lambda_dssim: 0.2
+  lambda_alpha: 0.1
+  lambda_alpha_start_iter: 1000
+  lambda_dist: 1000.0
+  lambda_dist_start_iter: 3000
+  lambda_3d_depth: 10.0
+  lambda_3d_depth_start_iter: 3000
+  lambda_3d_direction: 1.0
+  lambda_3d_direction_start_iter: 3000
+  lambda_2d_direction: 0.1
+  use_median_depths: False  # geometry loss on the median instead of the expected depth
+
+  # evaluation, point clouds and checkpoints at these iterations
+  test_iterations:
+    - 7_000
+    - 15_000
+  save_iterations:
+    - 7_000
+    - 15_000
+  checkpoint_iterations:
+    - 7_000
+    - 10_000
+    - 15_000

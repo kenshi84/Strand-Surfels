@@ -1,0 +1,102 @@
+# Packaging metadata and tool configuration for Strand-Surfels.
+#
+# The package ships CUDA extensions that are compiled against the installed
+# PyTorch, so it must be installed WITHOUT build isolation:
+#
+#     pip install --no-build-isolation -e .
+#
+# (with build isolation pip would compile against a freshly downloaded torch
+# that does not match the one in the environment).
+
+[build-system]
+requires = ["setuptools>=64", "wheel", "ninja"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strand-surfels"
+version = "0.1.0"
+description = "Hair strand reconstruction from multi-view images with 2D Gaussian surfels"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Allrez" }]
+keywords = ["gaussian splatting", "2dgs", "hair reconstruction", "multi-view stereo"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+# Versions are pinned exactly in environment.yml; here we only state the
+# minimum requirements of the package itself.
+dependencies = [
+    "torch>=2.4",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pillow>=10.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.60",
+    "jaxtyping>=0.2.30",
+    "tensorboard>=2.14",
+    "polyscope>=2.5",
+    # fused-ssim is also required, but it is not on PyPI and needs
+    # --no-build-isolation; see the installation section of the README.
+]
+
+[project.optional-dependencies]
+dev = ["black", "isort", "pylint", "pytest"]
+
+[project.scripts]
+strand-surfels-train = "strand_surfels.train:main"
+strand-surfels-view = "strand_surfels.viewer.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Allrez/Strand-Surfels"
+Repository = "https://github.com/Allrez/Strand-Surfels"
+"Stage 0 (SMHC / LPMVS)" = "https://github.com/Allrez/SMHC-Unofficial-Pytorch"
+
+[tool.setuptools.packages.find]
+include = ["strand_surfels*"]
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["strand_surfels"]
+
+[tool.pylint.main]
+# compiled extension modules cannot be inspected statically
+extension-pkg-allow-list = ["torch", "polyscope_bindings"]
+# fused_ssim is installed separately (see the README); the lint CI runs without it
+ignored-modules = ["strand_surfels._C", "polyscope.imgui", "fused_ssim"]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint."messages control"]
+disable = [
+    "invalid-name",            # math-style names (K, R, T, H, W) are used throughout
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "too-many-locals",
+    "too-many-instance-attributes",
+    "too-many-statements",
+    "too-few-public-methods",
+    "duplicate-code",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "cuda: test requires a CUDA capable GPU",
+    "gui: test requires an OpenGL display",
+]
