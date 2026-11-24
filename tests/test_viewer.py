@@ -3,12 +3,15 @@
 # pylint: disable=missing-function-docstring
 
 import math
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
 from fury.colormap import boys2rgb
+from scipy.spatial.transform import Rotation
+from test_data import make_scene
 
 from strand_surfels.io import load_surfels_ply, read_ply, save_surfels_ply
 from strand_surfels.viewer.cameras import (
@@ -32,12 +35,13 @@ def random_raw_params(n: int = 50, degree: int = 3, seed: int = 0):
     }
 
 
-def test_ply_round_trip(tmp_path):
+@pytest.mark.parametrize("strands_to_world", [None, np.eye(3)], ids=["world", "identity"])
+def test_ply_round_trip(tmp_path, strands_to_world):
     params = random_raw_params()
     # Non-unit wxyz quaternions taking local +x to +x, -x, +y, and -z.
     params["rotation"][:4] = [[2, 0, 0, 0], [0, 0, 0, 3], [2, 0, 0, 2], [1, 0, 1, 0]]
     path = str(tmp_path / "surfels.ply")
-    save_surfels_ply(path, params)
+    save_surfels_ply(path, params, strands_to_world_rotation=strands_to_world)
     loaded = load_surfels_ply(path)
     for key, value in params.items():
         np.testing.assert_array_equal(loaded[key], value)
@@ -53,6 +57,49 @@ def test_ply_round_trip(tmp_path):
     colors = np.column_stack([raw[name] for name in ("red", "green", "blue")])
     assert colors.dtype == np.uint8
     np.testing.assert_allclose(colors, np.clip(boys2rgb(tangents), 0, 1) * 255, rtol=0, atol=0.5)
+
+
+def test_ply_in_strand_coordinates(tmp_path):
+    from strand_surfels.rendering import eval_sh  # pylint: disable=import-outside-toplevel
+
+    params = random_raw_params()
+    params["label"] = params["opacity"].copy()
+    strands_to_world = Rotation.from_rotvec([0.4, -0.7, 0.3]).as_matrix()
+    path = str(tmp_path / "strands.ply")
+    save_surfels_ply(path, params, strands_to_world_rotation=strands_to_world)
+    comments = []
+    saved = load_surfels_ply(path, comments=comments)
+    assert "coordinate_frame strands" in comments
+    np.testing.assert_allclose(saved["xyz"], params["xyz"] @ strands_to_world, atol=3e-7)
+    for key in ("features_dc", "label", "opacity", "scaling"):
+        np.testing.assert_array_equal(saved[key], params[key])
+
+    world_frames = Rotation.from_quat(params["rotation"][:, [1, 2, 3, 0]]).as_matrix()
+    frames = Rotation.from_quat(saved["rotation"][:, [1, 2, 3, 0]]).as_matrix()
+    np.testing.assert_allclose(frames, strands_to_world.T @ world_frames, atol=1e-7)
+    np.testing.assert_allclose(
+        np.linalg.norm(saved["rotation"], axis=1),
+        np.linalg.norm(params["rotation"], axis=1),
+        rtol=2e-7,
+    )
+    raw = read_ply(path)
+    tangents = np.column_stack([raw[k] for k in ("nx", "ny", "nz")])
+    np.testing.assert_allclose(tangents, frames[:, :, 0], atol=1e-7)
+    colors = np.column_stack([raw[k] for k in ("red", "green", "blue")])
+    np.testing.assert_array_equal(colors, np.rint(boys2rgb(tangents).clip(0, 1) * 255))
+
+    dirs = F.normalize(torch.from_numpy(params["xyz"]), dim=1)
+    strand_dirs = dirs @ torch.from_numpy(strands_to_world).float()
+    world_sh = torch.from_numpy(
+        np.concatenate((params["features_dc"], params["features_rest"]), axis=1)
+    )
+    strand_sh = torch.from_numpy(
+        np.concatenate((saved["features_dc"], saved["features_rest"]), axis=1)
+    )
+    for degree in range(4):
+        torch.testing.assert_close(
+            eval_sh(degree, strand_sh, strand_dirs), eval_sh(degree, world_sh, dirs)
+        )
 
 
 def test_polyscope_camera_round_trip():
@@ -76,6 +123,34 @@ def test_polyscope_camera_round_trip():
 
 
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+
+
+@cuda
+@pytest.mark.cuda
+@pytest.mark.parametrize("output_in_mm", [False, True], ids=["meters", "millimeters"])
+def test_viewer_uses_ply_coordinate_frame(tmp_path, monkeypatch, output_in_mm):
+    # pylint: disable-next=import-outside-toplevel
+    from strand_surfels.viewer import __main__ as viewer_cli
+
+    rotation = Rotation.from_rotvec([0.4, -0.7, 0.3]).as_matrix()
+    scene = make_scene(str(tmp_path), strands_to_world_rotation=rotation)
+    calibration = str(tmp_path / "data" / "calibration.json")
+    path = str(tmp_path / "surfels.ply")
+    viewer = Mock()
+    monkeypatch.setattr(viewer_cli, "SurfelViewer", viewer)
+    for export_rotation in (None, rotation):
+        save_surfels_ply(
+            path,
+            random_raw_params(),
+            strands_to_world_rotation=export_rotation,
+            output_in_mm=output_in_mm,
+        )
+        viewer_cli.main([path, "--calibration", calibration])
+        _, cameras = viewer.call_args.args
+        expected = scene["centers"] if export_rotation is None else scene["centers"] @ rotation
+        np.testing.assert_allclose(
+            [c.center for c in cameras], expected * (1000.0 if output_in_mm else 1.0), atol=1e-3
+        )
 
 
 def small_scene():

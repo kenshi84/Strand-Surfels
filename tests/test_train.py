@@ -19,6 +19,7 @@ from test_data import make_scene  # noqa: E402
 
 from strand_surfels.config import load_yaml  # noqa: E402
 from strand_surfels.data import HairDataset  # noqa: E402
+from strand_surfels.io import load_surfels_ply  # noqa: E402
 from strand_surfels.losses import label_step  # noqa: E402
 from strand_surfels.model import SurfelModel  # noqa: E402
 from strand_surfels.train import DEFAULT_CONFIG, Trainer, main, seed_everything  # noqa: E402
@@ -48,8 +49,8 @@ def small_config():
     return cfg
 
 
-def scene_dataset(tmp_path):
-    scene = make_scene(str(tmp_path))
+def scene_dataset(tmp_path, *, strands_to_world_rotation=None):
+    scene = make_scene(str(tmp_path), strands_to_world_rotation=strands_to_world_rotation)
     # place the initial samples in front of the cameras
     positions = np.load(os.path.join(scene["output"], "filtered", "filtered_positions.npy"))
     positions[:, :3] = positions[:, :3] * 0.2 + np.array([0.1, 0.2, 0.3])
@@ -88,18 +89,33 @@ def test_resume_from_checkpoint(tmp_path):
     assert [h["iteration"] for h in resumed.history] == list(range(21, 41))
 
 
-def test_command_line(tmp_path):
-    scene, _ = scene_dataset(tmp_path)
+@pytest.mark.parametrize("output_in_mm", [False, True], ids=["meters", "millimeters"])
+def test_command_line(tmp_path, output_in_mm):
+    scene, _ = scene_dataset(tmp_path, strands_to_world_rotation=[[1, 0, 0], [0, 0, -1], [0, 1, 0]])
     run = str(tmp_path / "cli")
+    calib_path = tmp_path / "data" / "calibration.json"
+    calib_path.rename(calib_path.with_name("synthetic.json"))
     main(
         [
             "--data", scene["data"], "--smhc", scene["output"], "--run", run, "--viewer", "off",
+            "--calibration_json_file", "synthetic",
             "--optimization.iterations", "12", "--optimization.save_iterations", "12",
-            "--optimization.test_iterations", "--optimization.checkpoint_iterations",
+            "--optimization.test_iterations", "--optimization.checkpoint_iterations", "12",
             "--optimization.densify_until_iter", "0", "--labels.enabled", "false",
-        ]
+        ] + (["--output_in_mm"] if output_in_mm else [])
     )  # fmt: skip
-    assert os.path.exists(os.path.join(run, "point_cloud", "iteration_12", "point_cloud.ply"))
+    cloud = load_surfels_ply(os.path.join(run, "point_cloud", "iteration_12", "point_cloud.ply"))
+    checkpoint = torch.load(
+        os.path.join(run, "checkpoint", "chkpnt12.pth"), map_location="cpu", weights_only=False
+    )
+    x, y, z = checkpoint["model"]["params"]["xyz"].numpy().T
+    scale = 1000.0 if output_in_mm else 1.0
+    np.testing.assert_array_equal(cloud["xyz"], np.column_stack((x, z, -y)) * scale)
+    np.testing.assert_allclose(
+        np.exp(cloud["scaling"]),
+        np.exp(checkpoint["model"]["params"]["scaling"].numpy()) * scale,
+        rtol=1e-6,
+    )
     saved = load_yaml(os.path.join(run, "config.yaml"))
     assert saved["optimization"]["iterations"] == 12
     assert saved["labels"]["enabled"] is False  # defaults can be overridden too

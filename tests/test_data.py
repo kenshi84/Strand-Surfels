@@ -31,7 +31,7 @@ def rotation(axis: str, angle: float) -> np.ndarray:
     }[axis]
 
 
-def make_scene(root: str, n_cameras: int = 4) -> dict:
+def make_scene(root: str, n_cameras: int = 4, *, strands_to_world_rotation=None) -> dict:
     """data/ and output/ folders of a tiny scene; returns the camera centres."""
     data, out = os.path.join(root, "data"), os.path.join(root, "output")
     for d in ("image", "hair", "body"):
@@ -70,8 +70,11 @@ def make_scene(root: str, n_cameras: int = 4) -> dict:
         if i != 2:  # camera 2 has no int map
             int_map = rng.normal(size=(H, W, 3)).astype(np.float32)
             np.save(os.path.join(out, "int", f"int_map_{i:06d}.npy"), int_map)
+    calibration = {"cameras": cameras}
+    if strands_to_world_rotation is not None:
+        calibration["strands_to_world_rotation"] = np.asarray(strands_to_world_rotation).tolist()
     with open(os.path.join(data, "calibration.json"), "w", encoding="utf-8") as f:
-        json.dump({"cameras": cameras}, f)
+        json.dump(calibration, f)
 
     positions = rng.normal(size=(1000, 4)).astype(np.float32)
     directions = rng.normal(size=(1000, 4)).astype(np.float32)

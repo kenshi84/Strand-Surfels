@@ -35,7 +35,7 @@ import torch
 from PIL import Image
 from torch import Tensor
 
-from strand_surfels.data.cameras import Camera, camera_extent, load_calibration
+from strand_surfels.data.cameras import Camera, camera_extent, load_scene_calibration
 from strand_surfels.data.points import InitialPoints, load_initial_points
 from strand_surfels.losses.geometry import LineCamera
 
@@ -159,7 +159,9 @@ class HairDataset:
         self.mask_images = mask_images
         self.foreground_threshold = foreground_threshold
 
-        cameras = load_calibration(os.path.join(data_dir, calibration_file), downscale)
+        cameras, self.strands_to_world_rotation = load_scene_calibration(
+            os.path.join(data_dir, calibration_file), downscale
+        )
         if every_nth_camera > 1:
             cameras = cameras[::every_nth_camera]
         with ThreadPoolExecutor(max_workers=max(1, num_workers)) as pool:

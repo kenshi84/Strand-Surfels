@@ -38,6 +38,7 @@ from __future__ import annotations
 import math
 from typing import Dict, Optional
 
+import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 from torch import Tensor, nn
@@ -175,10 +176,19 @@ class SurfelModel:  # pylint: disable=too-many-instance-attributes
         model.active_sh_degree = degree
         return model
 
-    def save_ply(self, path: str) -> None:
-        """Write the raw parameters to a point cloud file."""
+    def save_ply(
+        self,
+        path: str,
+        *,
+        strands_to_world_rotation: np.ndarray | None = None,
+        output_in_mm: bool = False,
+    ) -> None:
+        """Write a point cloud, in source strand coordinates when a rotation is supplied."""
         save_surfels_ply(
-            path, {_FILE_NAMES[k]: v.detach().cpu().numpy() for k, v in self.params.items()}
+            path,
+            {_FILE_NAMES[k]: v.detach().cpu().numpy() for k, v in self.params.items()},
+            strands_to_world_rotation=strands_to_world_rotation,
+            output_in_mm=output_in_mm,
         )
 
     # ------------------------------------------------------------ accessors

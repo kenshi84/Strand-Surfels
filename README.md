@@ -77,6 +77,9 @@ output/<scene>/                    # SMHC outputs, Strand-Surfels writes its res
 Cameras follow the OpenCV convention: x to the right, y down, and the camera
 looking along +z.
 
+Both SMHC and Strand-Surfels compute scene geometry in meters. Camera
+translations, depth maps, point positions and surfel sizes use this unit.
+
 Without `body/` masks, the foreground is taken from the images: every pixel
 that is not pure black (scenes captured or rendered on a black background).
 `--foreground-threshold` raises this threshold (0–255), and a negative value
@@ -88,14 +91,27 @@ treats every pixel as foreground.
 strand-surfels-train --data data/<scene> --smhc output/<scene> --run output/<scene>/run1
 ```
 
+Add `--output_in_mm` to export PLY point clouds in millimeters. This multiplies
+positions and surfel sizes by 1000 at export time. The default PLY unit is meters.
+Training, evaluation and checkpoints use meters.
+
 The run folder receives the surfel point clouds
 (`point_cloud/iteration_<i>/point_cloud.ply`), checkpoints
 (`checkpoint/chkpnt<i>.pth`, resume with `--start-checkpoint`), the
 configuration used (`config.yaml`) and TensorBoard logs.
 
-In each surfel PLY, `nx`, `ny`, and `nz` store the world-space unit strand
-tangent. The 8-bit `red`, `green`, and `blue` vertex properties show its
-orientation using FURY's `boys2rgb` colormap.
+When `calibration.json` includes `strands_to_world_rotation`, the PLY export
+applies its inverse to express the surfels in the original strand coordinates.
+For CT2Hair this takes Blender's Z-up `(x, y, z)` to Y-up `(x, z, -y)`.
+The CT2Hair `head.obj` and `hair.data` use millimeters. PLY files exported with
+`--output_in_mm` use the same length unit as these original shapes. For the
+default meter exports, scale the original shapes by 0.001 when overlaying them.
+Training and checkpoints use the calibrated world coordinates.
+
+In each surfel PLY, `nx`, `ny`, and `nz` store the unit strand tangent in the
+same coordinates as the positions and surfel orientations. The 8-bit `red`,
+`green`, and `blue` vertex properties show the tangent's orientation using
+FURY's `boys2rgb` colormap.
 
 The settings are read from [configs/splatting_cfgs.yaml](configs/splatting_cfgs.yaml)
 (or `--config`), and every entry can be overridden on the command line by its

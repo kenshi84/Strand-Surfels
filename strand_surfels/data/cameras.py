@@ -75,8 +75,25 @@ def load_calibration(path: str, downscale: float = 1.0) -> List[Camera]:
 
     Image sizes are rounded; the intrinsics are divided by ``downscale``.
     """
+    cameras, _ = load_scene_calibration(path, downscale)
+    return cameras
+
+
+def load_scene_calibration(
+    path: str, downscale: float = 1.0
+) -> tuple[List[Camera], np.ndarray | None]:
+    """Read the world-space cameras and optional rotation from strand to world coordinates."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
+    rotation = None
+    if "strands_to_world_rotation" in data:
+        rotation = np.asarray(data["strands_to_world_rotation"], dtype=np.float64)
+        if (
+            rotation.shape != (3, 3)
+            or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-5)
+            or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-5)
+        ):
+            raise ValueError(f"{path}: strands_to_world_rotation must be a 3x3 rotation matrix")
     cameras = []
     for entry in data["cameras"]:
         uid = int(entry["camera_id"].lstrip("C"))
@@ -97,7 +114,7 @@ def load_calibration(path: str, downscale: float = 1.0) -> List[Camera]:
                 height=round(height / downscale),
             )
         )
-    return cameras
+    return cameras, rotation
 
 
 def camera_extent(cameras: Sequence[Camera]) -> Tuple[np.ndarray, float]:

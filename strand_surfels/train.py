@@ -72,6 +72,7 @@ class Trainer:  # pylint: disable=too-many-instance-attributes
         viewer: optional :class:`~strand_surfels.viewer.SurfelViewer`-like
             object with ``tick(iteration, stats)`` (shows the optimisation).
         log_tensorboard: write TensorBoard logs to ``run_dir``.
+        output_in_mm: export PLY positions and surfel sizes in millimeters.
     """
 
     def __init__(
@@ -81,12 +82,14 @@ class Trainer:  # pylint: disable=too-many-instance-attributes
         run_dir: str,
         viewer=None,
         log_tensorboard: bool = True,
+        output_in_mm: bool = False,
     ):
         self.dataset = dataset
         self.cfg = cfg
         self.opt = cfg["optimization"]
         self.labels = label_config(cfg)
         self.run_dir = run_dir
+        self.output_in_mm = output_in_mm
         self.viewer = viewer
         self.model = SurfelModel.from_points(
             dataset.initial_points, dataset.cameras_extent, self.opt["sh_degree"],
@@ -274,7 +277,11 @@ class Trainer:  # pylint: disable=too-many-instance-attributes
             path = os.path.join(
                 self.run_dir, "point_cloud", f"iteration_{iteration}", "point_cloud.ply"
             )
-            self.model.save_ply(path)
+            self.model.save_ply(
+                path,
+                strands_to_world_rotation=self.dataset.strands_to_world_rotation,
+                output_in_mm=self.output_in_mm,
+            )
             tqdm.write(f"[{iteration}] saved {len(self.model):,} surfels to {path}")
         if iteration in opt["checkpoint_iterations"]:
             tqdm.write(f"[{iteration}] checkpoint {self.save_checkpoint(iteration)}")
@@ -361,6 +368,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--data", required=True, help="input dataset folder (data/<scene>)")
     parser.add_argument("--smhc", required=True, help="SMHC results folder (output/<scene>)")
     parser.add_argument("--run", required=True, help="folder for the results")
+    parser.add_argument(
+        "--output_in_mm", action="store_true",
+        help="export PLY positions and surfel sizes in millimeters (default: meters)",
+    )  # fmt: skip
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--foreground-threshold", type=int, default=0,
@@ -390,7 +401,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         len(dataset), dataset.cameras_extent, len(dataset.initial_points),
     )  # fmt: skip
 
-    trainer = Trainer(dataset, cfg, args.run)
+    trainer = Trainer(dataset, cfg, args.run, output_in_mm=args.output_in_mm)
     if args.start_checkpoint:
         trainer.load_checkpoint(args.start_checkpoint)
 

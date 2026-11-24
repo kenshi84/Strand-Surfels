@@ -67,11 +67,21 @@ def opencv_from_polyscope(
     return K, viewmat
 
 
-def load_calibration(path: str, downscale: float = 1.0) -> List[ViewerCamera]:
-    """Viewer cameras of a dataset ``calibration.json`` (see the README, *Data layout*)."""
-    from strand_surfels.data import cameras  # pylint: disable=import-outside-toplevel
+def load_calibration(
+    path: str, downscale: float = 1.0, *, strand_frame: bool = False, in_mm: bool = False
+) -> List[ViewerCamera]:
+    """Dataset cameras expressed in the coordinate frame of the displayed PLY."""
+    # pylint: disable-next=import-outside-toplevel
+    from strand_surfels.data.cameras import load_scene_calibration
 
-    return [ViewerCamera.from_camera(c) for c in cameras.load_calibration(path, downscale)]
+    cameras, strands_to_world = load_scene_calibration(path, downscale)
+    if strand_frame and strands_to_world is not None:
+        for camera in cameras:
+            camera.viewmat[:3, :3] = camera.R @ strands_to_world
+    if in_mm:
+        for camera in cameras:
+            camera.viewmat[:3, 3] *= 1000.0
+    return [ViewerCamera.from_camera(c) for c in cameras]
 
 
 def up_direction(cameras: Sequence[ViewerCamera]) -> str:

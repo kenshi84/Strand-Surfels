@@ -13,7 +13,7 @@ import logging
 
 import torch
 
-from strand_surfels.io import load_surfels_ply
+from strand_surfels.io.ply import MILLIMETERS_COMMENT, STRANDS_FRAME_COMMENT, load_surfels_ply
 from strand_surfels.rendering import Surfels
 from strand_surfels.viewer.cameras import load_calibration
 from strand_surfels.viewer.viewer import SurfelViewer
@@ -38,9 +38,20 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    params = {k: torch.from_numpy(v).cuda() for k, v in load_surfels_ply(args.ply).items()}
+    comments = []
+    params = {
+        k: torch.from_numpy(v).cuda()
+        for k, v in load_surfels_ply(args.ply, comments=comments).items()
+    }
     surfels = Surfels.from_raw(**params, sh_degree=args.sh_degree)
-    cameras = load_calibration(args.calibration, args.downscale) if args.calibration else []
+    cameras = []
+    if args.calibration:
+        cameras = load_calibration(
+            args.calibration,
+            args.downscale,
+            strand_frame=STRANDS_FRAME_COMMENT in comments,
+            in_mm=MILLIMETERS_COMMENT in comments,
+        )
     print(f"{len(surfels):,} surfels (SH degree {surfels.sh_degree}), {len(cameras)} cameras")
 
     viewer = SurfelViewer(surfels, cameras, interop=not args.no_interop)
