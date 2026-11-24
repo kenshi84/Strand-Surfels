@@ -236,3 +236,11 @@ screenshot_*.png
 
 # CI stuff
 .github
+
+input
+input/
+output
+output/
+temp*
+temp/
+smhc
