@@ -1,4 +1,4 @@
-"""Reading and writing of PLY point clouds (binary, numpy only).
+"""Reading and writing of binary PLY point clouds.
 
 Surfels are stored in the point cloud format of 3D Gaussian Splatting, one
 vertex per surfel with the float properties
@@ -7,7 +7,9 @@ vertex per surfel with the float properties
 
 where the SH coefficients are stored channel-major (all coefficients of red,
 then green, then blue) and opacities, scales and rotations are raw
-(pre-activation) values. The normals are unused and written as zeros.
+(pre-activation) values. The float properties ``nx ny nz`` hold the world-space
+unit strand tangent (the rotated local x axis). The ``uchar`` properties
+``red green blue`` encode that tangent with :func:`fury.colormap.boys2rgb`.
 
 Point clouds written since the hair labels were added (a later addition, see
 :mod:`strand_surfels.losses.labels`) have one more property, ``label``: the
@@ -76,18 +78,25 @@ def read_ply(path: str, element: str = "vertex") -> Dict[str, np.ndarray]:
     raise ValueError(f"{path} has no element {element!r}")
 
 
-def write_ply(path: str, properties: Dict[str, np.ndarray], element: str = "vertex") -> None:
-    """Write 1D arrays of equal length as float32 properties of a binary PLY file."""
-    names = list(properties)
-    count = len(properties[names[0]]) if names else 0
-    dtype = np.dtype([(n, "<f4") for n in names])
+def write_ply(
+    path: str,
+    properties: Dict[str, np.ndarray],
+    element: str = "vertex",
+    *,
+    property_types: dict[str, str] | None = None,
+) -> None:
+    """Write equal-length 1D arrays with the given PLY scalar types (default: float)."""
+    property_types = property_types or {}
+    types = {name: property_types.get(name, "float") for name in properties}
+    count = len(next(iter(properties.values()))) if properties else 0
+    dtype = np.dtype([(name, "<" + _PLY_TYPES[t]) for name, t in types.items()])
     data = np.empty(count, dtype=dtype)
-    for n in names:
-        if len(properties[n]) != count:
+    for name, values in properties.items():
+        if len(values) != count:
             raise ValueError("all properties must have the same length")
-        data[n] = properties[n]
+        data[name] = values
     header = ["ply", "format binary_little_endian 1.0", f"element {element} {count}"]
-    header += [f"property float {n}" for n in names]
+    header += [f"property {t} {name}" for name, t in types.items()]
     header.append("end_header")
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "wb") as f:
@@ -127,20 +136,30 @@ def load_surfels_ply(path: str) -> Dict[str, np.ndarray]:
 
 def save_surfels_ply(path: str, params: Dict[str, np.ndarray]) -> None:
     """Write raw surfel parameters (as returned by :func:`load_surfels_ply`)."""
+    # Keep the generic PLY reader and writer usable with NumPy alone.
+    # pylint: disable=import-outside-toplevel
+    from fury.colormap import boys2rgb
+    from scipy.spatial.transform import Rotation
+
     xyz = np.asarray(params["xyz"], dtype=np.float32)
     n = xyz.shape[0]
     # SH coefficients channel-major: [N, K, 3] -> [N, 3, K] -> [N, 3K]
     f_dc = np.asarray(params["features_dc"]).transpose(0, 2, 1).reshape(n, -1)
     f_rest = np.asarray(params["features_rest"]).transpose(0, 2, 1).reshape(n, -1)
+    rotation = np.asarray(params["rotation"], dtype=np.float32)
+    frame = Rotation.from_quat(rotation[:, [1, 2, 3, 0]])  # PLY wxyz -> SciPy xyzw
+    tangents = frame.apply([1.0, 0.0, 0.0]).astype(np.float32)
     props = {"x": xyz[:, 0], "y": xyz[:, 1], "z": xyz[:, 2]}
-    props.update({k: np.zeros(n, dtype=np.float32) for k in ("nx", "ny", "nz")})
+    props.update(zip(("nx", "ny", "nz"), tangents.T))
     props.update({f"f_dc_{i}": f_dc[:, i] for i in range(f_dc.shape[1])})
     props.update({f"f_rest_{i}": f_rest[:, i] for i in range(f_rest.shape[1])})
     props["opacity"] = np.asarray(params["opacity"]).reshape(n)
     scaling = np.asarray(params["scaling"])
     props.update({f"scale_{i}": scaling[:, i] for i in range(scaling.shape[1])})
-    rotation = np.asarray(params["rotation"])
     props.update({f"rot_{i}": rotation[:, i] for i in range(rotation.shape[1])})
     if params.get("label") is not None:
         props["label"] = np.asarray(params["label"]).reshape(n)
-    write_ply(path, props)
+    color_names = ("red", "green", "blue")
+    colors = np.rint(np.clip(boys2rgb(tangents), 0, 1) * 255).astype(np.uint8)
+    props.update(zip(color_names, colors.T))
+    write_ply(path, props, property_types=dict.fromkeys(color_names, "uchar"))

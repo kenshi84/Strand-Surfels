@@ -93,6 +93,10 @@ The run folder receives the surfel point clouds
 (`checkpoint/chkpnt<i>.pth`, resume with `--start-checkpoint`), the
 configuration used (`config.yaml`) and TensorBoard logs.
 
+In each surfel PLY, `nx`, `ny`, and `nz` store the world-space unit strand
+tangent. The 8-bit `red`, `green`, and `blue` vertex properties show its
+orientation using FURY's `boys2rgb` colormap.
+
 The settings are read from [configs/splatting_cfgs.yaml](configs/splatting_cfgs.yaml)
 (or `--config`), and every entry can be overridden on the command line by its
 dotted name, e.g. `--optimization.iterations 30000` or

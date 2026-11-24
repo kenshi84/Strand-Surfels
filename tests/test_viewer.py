@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+from fury.colormap import boys2rgb
 
 from strand_surfels.io import load_surfels_ply, read_ply, save_surfels_ply
 from strand_surfels.viewer.cameras import (
@@ -33,6 +34,8 @@ def random_raw_params(n: int = 50, degree: int = 3, seed: int = 0):
 
 def test_ply_round_trip(tmp_path):
     params = random_raw_params()
+    # Non-unit wxyz quaternions taking local +x to +x, -x, +y, and -z.
+    params["rotation"][:4] = [[2, 0, 0, 0], [0, 0, 0, 3], [2, 0, 0, 2], [1, 0, 1, 0]]
     path = str(tmp_path / "surfels.ply")
     save_surfels_ply(path, params)
     loaded = load_surfels_ply(path)
@@ -42,7 +45,14 @@ def test_ply_round_trip(tmp_path):
     raw = read_ply(path)
     np.testing.assert_array_equal(raw["f_rest_0"], params["features_rest"][:, 0, 0])
     np.testing.assert_array_equal(raw["f_rest_15"], params["features_rest"][:, 0, 1])
-    np.testing.assert_array_equal(raw["nx"], 0.0)
+    tangents = np.column_stack([raw[name] for name in ("nx", "ny", "nz")])
+    np.testing.assert_allclose(
+        tangents[:4], [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, -1]], atol=1e-7
+    )
+    np.testing.assert_allclose(np.linalg.norm(tangents, axis=1), 1.0, atol=1e-7)
+    colors = np.column_stack([raw[name] for name in ("red", "green", "blue")])
+    assert colors.dtype == np.uint8
+    np.testing.assert_allclose(colors, np.clip(boys2rgb(tangents), 0, 1) * 255, rtol=0, atol=0.5)
 
 
 def test_polyscope_camera_round_trip():
