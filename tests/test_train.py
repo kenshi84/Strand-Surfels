@@ -18,8 +18,8 @@ pytest.importorskip("fused_ssim")
 from test_data import make_scene  # noqa: E402
 
 from strand_surfels.config import load_yaml  # noqa: E402
-from strand_surfels.data import HairDataset  # noqa: E402
-from strand_surfels.io import load_surfels_ply  # noqa: E402
+from strand_surfels.data import HairDataset, InitialPoints  # noqa: E402
+from strand_surfels.io import load_surfels_ply, read_ply  # noqa: E402
 from strand_surfels.losses import label_step  # noqa: E402
 from strand_surfels.model import SurfelModel  # noqa: E402
 from strand_surfels.train import DEFAULT_CONFIG, Trainer, main, seed_everything  # noqa: E402
@@ -69,8 +69,14 @@ def test_training_runs_densifies_and_saves(tmp_path):
     assert all(np.isfinite(h["loss"]) for h in trainer.history)
     assert len(model) != n0  # densification and pruning changed the surfels
     assert max(h["surfels"] for h in trainer.history) <= 400 + n0
-    ply = os.path.join(run, "point_cloud", "iteration_40", "point_cloud.ply")
+    folder = os.path.join(run, "point_cloud", "iteration_40")
+    ply = os.path.join(folder, "point_cloud_all.ply")
     assert len(SurfelModel.from_ply(ply)) == len(model)
+    all_props = read_ply(ply)
+    hair_props = read_ply(os.path.join(folder, "point_cloud.ply"))
+    hair = all_props["label"] > 0
+    for name, values in all_props.items():
+        np.testing.assert_array_equal(hair_props[name], values[hair])
     assert os.path.exists(os.path.join(run, "checkpoint", "chkpnt20.pth"))
     assert set(trainer.evaluate()) == {"l1", "psnr", "ssim", "hair_iou"}
     assert sum("label" in h for h in trainer.history) == 4  # every 10 iterations
@@ -104,7 +110,9 @@ def test_command_line(tmp_path, output_in_mm):
             "--optimization.densify_until_iter", "0", "--labels.enabled", "false",
         ] + (["--output_in_mm"] if output_in_mm else [])
     )  # fmt: skip
-    cloud = load_surfels_ply(os.path.join(run, "point_cloud", "iteration_12", "point_cloud.ply"))
+    folder = os.path.join(run, "point_cloud", "iteration_12")
+    cloud = load_surfels_ply(os.path.join(folder, "point_cloud_all.ply"))
+    assert len(read_ply(os.path.join(folder, "point_cloud.ply"))["x"]) == 0
     checkpoint = torch.load(
         os.path.join(run, "checkpoint", "chkpnt12.pth"), map_location="cpu", weights_only=False
     )
@@ -119,6 +127,47 @@ def test_command_line(tmp_path, output_in_mm):
     saved = load_yaml(os.path.join(run, "config.yaml"))
     assert saved["optimization"]["iterations"] == 12
     assert saved["labels"]["enabled"] is False  # defaults can be overridden too
+
+
+@pytest.mark.parametrize("hair_count", [0, 1, 4], ids=["no-hair", "mixed", "all-hair"])
+@pytest.mark.parametrize("output_in_mm", [False, True], ids=["meters", "millimeters"])
+def test_save_outputs_filters_hair_and_preserves_properties(tmp_path, hair_count, output_in_mm):
+    _, dataset = scene_dataset(
+        tmp_path, strands_to_world_rotation=[[1, 0, 0], [0, 0, -1], [0, 1, 0]]
+    )
+    cfg = small_config()
+    trainer = Trainer(
+        dataset, cfg, str(tmp_path / "run"), log_tensorboard=False, output_in_mm=output_in_mm
+    )
+    points = dataset.initial_points
+    trainer.model = SurfelModel.from_points(
+        InitialPoints(points.xyz[:4], points.dirs[:4], points.gray[:4]), dataset.cameras_extent
+    )
+    # Include the boundary logit 0: probability exactly 0.5 is not selected.
+    with torch.no_grad():
+        trainer.model.params["label"].fill_(-2.0)
+        trainer.model.params["label"][:hair_count] = 2.0
+        if hair_count < 4:
+            trainer.model.params["label"][-1] = 0.0
+    before = {name: value.detach().clone() for name, value in trainer.model.params.items()}
+    cfg["optimization"]["test_iterations"] = []
+    trainer._save_outputs(40)  # pylint: disable=protected-access
+
+    folder = tmp_path / "run" / "point_cloud" / "iteration_40"
+    all_comments, hair_comments = [], []
+    all_props = read_ply(str(folder / "point_cloud_all.ply"), comments=all_comments)
+    hair_props = read_ply(str(folder / "point_cloud.ply"), comments=hair_comments)
+    assert len(all_props["x"]) == 4
+    assert len(hair_props["x"]) == hair_count
+    assert hair_comments == all_comments
+    assert "coordinate_frame strands" in hair_comments
+    assert ("length_unit millimeters" in hair_comments) == output_in_mm
+    assert hair_props.keys() == all_props.keys()
+    for name, values in all_props.items():
+        np.testing.assert_array_equal(hair_props[name], values[:hair_count])
+        assert hair_props[name].dtype == values.dtype
+    for name, value in trainer.model.params.items():
+        torch.testing.assert_close(value, before[name], rtol=0, atol=0)
 
 
 def test_labels_learn_the_hair_masks_and_nothing_else(tmp_path):

@@ -7,7 +7,8 @@ Example::
 ``--data`` is the input dataset, ``--smhc`` the folder with the SMHC results
 (``int/`` and ``filtered/``) and ``--run`` the folder for the results:
 
-* ``point_cloud/iteration_<i>/point_cloud.ply``: surfels at the save iterations,
+* ``point_cloud/iteration_<i>/point_cloud.ply``: hair surfels at the save iterations,
+* ``point_cloud/iteration_<i>/point_cloud_all.ply``: all surfels at the save iterations,
 * ``checkpoint/chkpnt<i>.pth``: model and optimizer state for resuming,
 * ``config.yaml``: the configuration used, and TensorBoard logs.
 
@@ -34,6 +35,7 @@ from tqdm import tqdm
 
 from strand_surfels.config import load_config, save_config
 from strand_surfels.data import HairDataset
+from strand_surfels.io import read_ply, write_ply
 from strand_surfels.losses.labels import (
     LABEL_DEFAULTS,
     label_config,
@@ -274,15 +276,27 @@ class Trainer:  # pylint: disable=too-many-instance-attributes
         """Point cloud, checkpoint and evaluation at the configured iterations."""
         opt = self.opt
         if iteration in opt["save_iterations"]:
-            path = os.path.join(
-                self.run_dir, "point_cloud", f"iteration_{iteration}", "point_cloud.ply"
-            )
+            folder = os.path.join(self.run_dir, "point_cloud", f"iteration_{iteration}")
+            all_path = os.path.join(folder, "point_cloud_all.ply")
             self.model.save_ply(
-                path,
+                all_path,
                 strands_to_world_rotation=self.dataset.strands_to_world_rotation,
                 output_in_mm=self.output_in_mm,
             )
-            tqdm.write(f"[{iteration}] saved {len(self.model):,} surfels to {path}")
+            tqdm.write(f"[{iteration}] saved {len(self.model):,} surfels to {all_path}")
+
+            # Filter the exported properties to retain their coordinate frame, units and colors.
+            comments = []
+            props = read_ply(all_path, comments=comments)
+            hair = props["label"] > 0.0  # sigmoid(label) > 0.5
+            path = os.path.join(folder, "point_cloud.ply")
+            write_ply(
+                path,
+                {name: values[hair] for name, values in props.items()},
+                property_types=dict.fromkeys(("red", "green", "blue"), "uchar"),
+                comments=comments,
+            )
+            tqdm.write(f"[{iteration}] saved {hair.sum():,} hair surfels to {path}")
         if iteration in opt["checkpoint_iterations"]:
             tqdm.write(f"[{iteration}] checkpoint {self.save_checkpoint(iteration)}")
         if iteration in opt["test_iterations"]:

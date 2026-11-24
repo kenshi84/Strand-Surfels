@@ -95,8 +95,9 @@ Add `--output_in_mm` to export PLY point clouds in millimeters. This multiplies
 positions and surfel sizes by 1000 at export time. The default PLY unit is meters.
 Training, evaluation and checkpoints use meters.
 
-The run folder receives the surfel point clouds
-(`point_cloud/iteration_<i>/point_cloud.ply`), checkpoints
+The run folder receives the hair-only surfel point clouds
+(`point_cloud/iteration_<i>/point_cloud.ply`) and the full reconstructions
+(`point_cloud/iteration_<i>/point_cloud_all.ply`), checkpoints
 (`checkpoint/chkpnt<i>.pth`, resume with `--start-checkpoint`), the
 configuration used (`config.yaml`) and TensorBoard logs.
 
@@ -173,6 +174,12 @@ intersection over union of the rendered hair and the hair masks. The settings
 live in the `labels` section of the configuration (`--labels.enabled false`
 turns the labels off, also `--labels.weight`, `--labels.lr`,
 `--labels.interval`). Point clouds without labels can still be loaded.
+
+At each save iteration, `point_cloud_all.ply` contains every surfel, while
+`point_cloud.ply` contains only surfels with hair probability above 0.5
+(`label > 0`). Both files retain all properties, coordinate-frame metadata
+and length units. With labels disabled, the default initial probability of
+0.5 produces an empty hair-only file; the full reconstruction is still saved.
 
 ## Viewer
 
