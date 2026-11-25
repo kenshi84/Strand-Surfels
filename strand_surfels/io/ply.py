@@ -76,18 +76,25 @@ def read_ply(path: str, element: str = "vertex") -> Dict[str, np.ndarray]:
     raise ValueError(f"{path} has no element {element!r}")
 
 
-def write_ply(path: str, properties: Dict[str, np.ndarray], element: str = "vertex") -> None:
-    """Write 1D arrays of equal length as float32 properties of a binary PLY file."""
-    names = list(properties)
-    count = len(properties[names[0]]) if names else 0
-    dtype = np.dtype([(n, "<f4") for n in names])
+def write_ply(
+    path: str,
+    properties: Dict[str, np.ndarray],
+    element: str = "vertex",
+    *,
+    property_types: dict[str, str] | None = None,
+) -> None:
+    """Write equal-length 1D arrays with the given PLY scalar types (default: float)."""
+    property_types = property_types or {}
+    types = {name: property_types.get(name, "float") for name in properties}
+    count = len(next(iter(properties.values()))) if properties else 0
+    dtype = np.dtype([(name, "<" + _PLY_TYPES[t]) for name, t in types.items()])
     data = np.empty(count, dtype=dtype)
-    for n in names:
-        if len(properties[n]) != count:
+    for name, values in properties.items():
+        if len(values) != count:
             raise ValueError("all properties must have the same length")
-        data[n] = properties[n]
+        data[name] = values
     header = ["ply", "format binary_little_endian 1.0", f"element {element} {count}"]
-    header += [f"property float {n}" for n in names]
+    header += [f"property {t} {name}" for name, t in types.items()]
     header.append("end_header")
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "wb") as f:

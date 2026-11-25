@@ -38,12 +38,14 @@ from __future__ import annotations
 import math
 from typing import Dict, Optional
 
+from fury.colormap import boys2rgb
+import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 from torch import Tensor, nn
 
 from strand_surfels.data.points import InitialPoints, mean_squared_neighbor_distance
-from strand_surfels.io import load_surfels_ply, save_surfels_ply
+from strand_surfels.io import load_surfels_ply, save_surfels_ply, write_ply
 from strand_surfels.model.schedules import exponential_lr
 from strand_surfels.optim import SparseAdam
 from strand_surfels.rendering import Surfels
@@ -180,6 +182,20 @@ class SurfelModel:  # pylint: disable=too-many-instance-attributes
         save_surfels_ply(
             path, {_FILE_NAMES[k]: v.detach().cpu().numpy() for k, v in self.params.items()}
         )
+
+    def export_hair_point_cloud_in_mm(self, path: str) -> None:
+        hair_mask = self.params["label"].squeeze(-1) > 0.0      # sigmoid(label) > 0.5
+        xyz = self.params["xyz"][hair_mask].detach().cpu().float().numpy() * 1000
+        rotation = self.params["rotation"][hair_mask].detach().cpu().float().numpy()
+        frame = Rotation.from_quat(rotation[:, [1, 2, 3, 0]])  # PLY wxyz -> SciPy xyzw
+        tangents = frame.apply([1.0, 0.0, 0.0])
+        color_names = ("red", "green", "blue")
+        colors = np.rint(np.clip(boys2rgb(tangents), 0, 1) * 255).astype(np.uint8)
+        properties = dict()
+        properties.update(zip(("x", "y", "z"), xyz.T))
+        properties.update(zip(("nx", "ny", "nz"), tangents.T))
+        properties.update(zip(color_names, colors.T))
+        write_ply(path, properties, property_types=dict.fromkeys(color_names, "uchar"))
 
     # ------------------------------------------------------------ accessors
 

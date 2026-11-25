@@ -89,9 +89,16 @@ strand-surfels-train --data data/<scene> --smhc output/<scene> --run output/<sce
 ```
 
 The run folder receives the surfel point clouds
-(`point_cloud/iteration_<i>/point_cloud.ply`), checkpoints
+(`point_cloud/iteration_<i>/point_cloud.ply`), the hair-only point clouds in millimeters
+(`point_cloud/iteration_<i>/hair_point_cloud_mm.ply`), checkpoints
 (`checkpoint/chkpnt<i>.pth`, resume with `--start-checkpoint`), the
 configuration used (`config.yaml`) and TensorBoard logs.
+
+The hair-only point cloud `hair_point_cloud_mm.ply` (omitted with `--labels.enabled false`)
+only stores (besides positions) strand tangents as normals as well as its mapped color
+`fury.colormap.boys2rgb` for visualization. Also keep in mind that both SMHC and
+Strand-Surfels compute scene geometry in meters. Camera translations, depth maps,
+point positions and surfel sizes use this unit.
 
 The settings are read from [configs/splatting_cfgs.yaml](configs/splatting_cfgs.yaml)
 (or `--config`), and every entry can be overridden on the command line by its

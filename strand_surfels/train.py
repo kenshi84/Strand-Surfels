@@ -271,11 +271,15 @@ class Trainer:  # pylint: disable=too-many-instance-attributes
         """Point cloud, checkpoint and evaluation at the configured iterations."""
         opt = self.opt
         if iteration in opt["save_iterations"]:
-            path = os.path.join(
-                self.run_dir, "point_cloud", f"iteration_{iteration}", "point_cloud.ply"
+            folder = os.path.join(
+                self.run_dir, "point_cloud", f"iteration_{iteration}"
             )
+            path = os.path.join(folder, "point_cloud.ply")
             self.model.save_ply(path)
             tqdm.write(f"[{iteration}] saved {len(self.model):,} surfels to {path}")
+            if self.labels["enabled"]:
+                path = os.path.join(folder, "hair_point_cloud_mm.ply")
+                self.model.export_hair_point_cloud_in_mm(path)
         if iteration in opt["checkpoint_iterations"]:
             tqdm.write(f"[{iteration}] checkpoint {self.save_checkpoint(iteration)}")
         if iteration in opt["test_iterations"]:
