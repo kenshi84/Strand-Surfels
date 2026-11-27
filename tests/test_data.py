@@ -119,6 +119,24 @@ def test_views(tmp_path):
             assert (data.int_map[0] == -1).all() and (data.int_map[1:] == 0).all()
 
 
+@pytest.mark.parametrize('extension', ('.jpg', '.jpeg'))
+@pytest.mark.parametrize('digits', (6, 5, 4))
+def test_jpeg_views(tmp_path, extension, digits):
+    scene = make_scene(str(tmp_path))
+    for i in range(4):
+        path = tmp_path / 'data' / 'image' / f'img_{i:06d}.png'
+        with Image.open(path) as image:
+            image.save(path.with_name(f'img_{i:0{digits}d}{extension}'))
+        path.unlink()
+
+    dataset = HairDataset(scene['data'], scene['output'], num_workers=1)
+    assert len(dataset) == 4
+    for i, view in enumerate(dataset.views):
+        path = tmp_path / 'data' / 'image' / f'img_{i:0{digits}d}{extension}'
+        with Image.open(path) as image:
+            torch.testing.assert_close(view.image, torch.from_numpy(np.array(image.convert('RGB'))))
+
+
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_missing_int_map_gives_zero_geometry_loss(tmp_path):

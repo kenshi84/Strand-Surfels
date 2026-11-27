@@ -101,11 +101,13 @@ class View:
         )
 
 
-def _find_image(folder: str, uid: int, prefix: str = "img_", ext: str = ".png") -> Optional[str]:
+def _find_image(folder: str, uid: int, prefix: str = 'img_', ext: Optional[str] = None) -> Optional[str]:
+    extensions = (ext,) if ext is not None else ('.png', '.jpg', '.jpeg')
     for digits in (6, 5, 4):
-        path = os.path.join(folder, f"{prefix}{uid:0{digits}d}{ext}")
-        if os.path.exists(path):
-            return path
+        for extension in extensions:
+            path = os.path.join(folder, f'{prefix}{uid:0{digits}d}{extension}')
+            if os.path.exists(path):
+                return path
     return None
 
 
