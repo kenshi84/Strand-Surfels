@@ -122,13 +122,17 @@ def test_views(tmp_path):
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_missing_int_map_gives_zero_geometry_loss(tmp_path):
-    from strand_surfels.losses import geometry_loss  # pylint: disable=import-outside-toplevel
+    from strand_surfels.losses import (  # pylint: disable=import-outside-toplevel
+        direction_to_structure_tensor,
+        geometry_loss,
+    )
 
     scene = make_scene(str(tmp_path))
     data = HairDataset(scene["data"], scene["output"])[2].load("cuda")
     depth = torch.full((H, W), 2.0, device="cuda")
     dirs = torch.nn.functional.normalize(torch.randn(3, H, W, device="cuda"), dim=0)
-    assert (geometry_loss(depth, dirs, data.int_map, data.line_camera) == 0).all()
+    tensors = direction_to_structure_tensor(dirs)
+    assert (geometry_loss(depth, tensors, data.int_map, data.line_camera) == 0).all()
 
 
 def test_foreground_from_colors(tmp_path):

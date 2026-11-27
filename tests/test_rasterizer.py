@@ -49,7 +49,7 @@ def upstream(seed: int):
     g = torch.Generator(device="cuda").manual_seed(seed)
     return (
         torch.randn(3, HEIGHT, WIDTH, device="cuda", generator=g),
-        torch.randn(7, HEIGHT, WIDTH, device="cuda", generator=g),
+        torch.randn(10, HEIGHT, WIDTH, device="cuda", generator=g),
         torch.randn(1, HEIGHT, WIDTH, device="cuda", generator=g),
     )
 

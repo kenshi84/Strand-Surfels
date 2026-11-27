@@ -14,6 +14,7 @@ if not torch.cuda.is_available():
 
 # pylint: disable=wrong-import-position
 from strand_surfels.losses import (  # noqa: E402
+    direction_to_structure_tensor,
     geometry_loss,
     line_camera_matrices,
     orientation_2d,
@@ -49,7 +50,13 @@ def random_view(seed: int):
         ]
     )
     cam = line_camera_matrices(K, viewmat)
-    return depth.cuda(), dirs.cuda(), int_map.cuda(), cam.to("cuda")
+    return (
+        depth.cuda(),
+        dirs.cuda(),
+        direction_to_structure_tensor(dirs).cuda(),
+        int_map.cuda(),
+        cam.to("cuda"),
+    )
 
 
 def line_angle_reference(depth, dirs, cam):
@@ -67,80 +74,130 @@ def line_angle_reference(depth, dirs, cam):
     return torch.atan(-ab[0] / (ab[1] + 1e-7)), ab, point
 
 
-def reference(depth, dirs, int_map, cam):
-    """Loss map and per-pixel derivatives (d/d depth, d/d dirs of the active term)."""
+def quadratic(tensors, vectors):
+    x, y, z = vectors
+    return (
+        tensors[0] * x * x
+        + 2 * tensors[1] * x * y
+        + 2 * tensors[2] * x * z
+        + tensors[3] * y * y
+        + 2 * tensors[4] * y * z
+        + tensors[5] * z * z
+    )
+
+
+def basis(vectors):
+    x, y, z = vectors
+    return torch.stack((x * x, 2 * x * y, 2 * x * z, y * y, 2 * y * z, z * z))
+
+
+def reference(depth, tensors, int_map, cam):
+    """Sign-invariant tensor loss and its per-pixel derivatives."""
     consistent = int_map[0] > 0
-    dir_mask = ((dirs * dirs).sum(0) > 1e-6).float()
+    tensor_mask = (tensors[[0, 3, 5]].sum(0) > 1e-6).float()
     x, y = int_map[1], int_map[2]
     mvs = torch.stack([x, y, torch.nan_to_num(torch.sqrt(1 - x * x - y * y), nan=0.0)])
     mvs = mvs * torch.where((mvs * mvs).sum(0) > 1e-6, torch.rsqrt((mvs * mvs).sum(0)), 0.0)
-    mvs = torch.where((mvs * dirs).sum(0) < 0, -mvs, mvs)
 
-    angle, ab, point = line_angle_reference(depth, dirs, cam)
+    ys, xs = torch.meshgrid(
+        torch.arange(H, device="cuda").float(),
+        torch.arange(W, device="cuda").float(),
+        indexing="ij",
+    )
     ori, conf = int_map[1], int_map[2]
-    wrap = (angle - ori).abs() >= math.pi / 2
-    ori = torch.where(wrap, torch.where(ori >= 0, ori - math.pi, ori + math.pi), ori)
-    sign = torch.where(angle >= ori, 1.0, -1.0)
-    sign = torch.where(~wrap & (ori >= angle), -1.0, sign)
-    cost = sign * (angle - ori) * conf / 10.0
+    ray0 = torch.einsum("ij,jhw->ihw", cam.m_inv, torch.stack((xs, ys, torch.ones_like(xs))))
+    ray1 = torch.einsum(
+        "ij,jhw->ihw",
+        cam.m_inv,
+        torch.stack((xs + torch.cos(ori), ys + torch.sin(ori), torch.ones_like(xs))),
+    )
+    normal = torch.nn.functional.normalize(torch.cross(ray0, ray1, dim=0), dim=0)
+    q_2d = quadratic(tensors, normal).clamp_min(0.0)
+    root_2d = torch.sqrt(q_2d + 1e-6)
 
     zero = torch.zeros_like(depth)
     loss = torch.stack(
         [
             torch.where(consistent, (depth - int_map[0]).abs(), zero),
-            torch.where(consistent, (1 - (dirs * mvs).sum(0)) * dir_mask, zero),
-            torch.where(consistent, zero, cost * dir_mask),
+            torch.where(consistent, (1 - quadratic(tensors, mvs)) * tensor_mask, zero),
+            torch.where(
+                consistent, zero, (root_2d - 1e-3) * conf / 10.0 * tensor_mask
+            ),
         ]
     )
-    # derivative of the 2D term (moment contribution taken component-wise)
-    d_angle = sign * conf / 10.0
-    ab_sq = ab[0] ** 2 + ab[1] ** 2 + 1e-7
-    v_ab = torch.stack([d_angle * -ab[1] / ab_sq, d_angle * ab[0] / ab_sq])
-    v_pluecker = torch.einsum("ij,ihw->jhw", cam.line_proj[:2], v_ab)
-    v_moment, v_dir = v_pluecker[:3].flip(0), v_pluecker[3:].flip(0)
-    p = point
-    v_dir = v_dir + v_moment * torch.stack([p[2] - p[1], p[0] - p[2], p[1] - p[0]])
-    jac_dir = torch.where(consistent, -mvs * dir_mask, v_dir * dir_mask)
+    jac_tensor = torch.where(
+        consistent.unsqueeze(0),
+        -basis(mvs),
+        basis(normal) * conf.unsqueeze(0) / (20.0 * root_2d.unsqueeze(0)),
+    ) * tensor_mask.unsqueeze(0)
     jac_depth = torch.where(consistent, torch.sign(depth - int_map[0]), zero)
-    return loss, jac_depth, jac_dir
+    return loss, jac_depth, jac_tensor
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
 def test_geometry_loss_matches_reference(seed):
-    depth, dirs, int_map, cam = random_view(seed)
+    depth, _, tensors, int_map, cam = random_view(seed)
     up = torch.randn(3, H, W, device="cuda", generator=torch.Generator("cuda").manual_seed(seed))
     d = depth.clone().requires_grad_(True)
-    r = dirs.clone().requires_grad_(True)
+    r = tensors.clone().requires_grad_(True)
     loss = geometry_loss(d, r, int_map, cam)
     (loss * up).sum().backward()
 
-    ref_loss, jac_depth, jac_dir = reference(depth, dirs, int_map, cam)
+    ref_loss, jac_depth, jac_tensor = reference(depth, tensors, int_map, cam)
     consistent = int_map[0] > 0
     torch.testing.assert_close(loss, ref_loss, atol=1e-4, rtol=1e-4)
     torch.testing.assert_close(d.grad, up[0] * jac_depth)
     v_term = torch.where(consistent, up[1], up[2])
-    torch.testing.assert_close(r.grad, v_term * jac_dir, atol=1e-4, rtol=1e-3)
+    # The Charbonnier derivative contains 1 / sqrt(q + eps^2); close to exact
+    # alignment it amplifies the small CUDA/PyTorch rounding difference in the
+    # viewing-plane normal. The dedicated 3D test below retains tighter bounds.
+    torch.testing.assert_close(r.grad, v_term * jac_tensor, atol=1e-4, rtol=2e-2)
 
 
 def test_3d_terms_match_autograd():
-    depth, dirs, int_map, cam = random_view(3)
+    depth, _, tensors, int_map, cam = random_view(3)
     int_map[0] = int_map[0].abs() + 1.0  # all pixels consistent
     xy = torch.nn.functional.normalize(torch.randn(3, H, W, device="cuda"), dim=0)
     int_map[1:] = (xy * torch.where(xy[2:3] < 0, -1.0, 1.0))[:2]
     d = depth.clone().requires_grad_(True)
-    r = dirs.clone().requires_grad_(True)
+    r = tensors.clone().requires_grad_(True)
     geometry_loss(d, r, int_map, cam)[:2].sum().backward()
 
     d2 = depth.clone().requires_grad_(True)
-    r2 = dirs.clone().requires_grad_(True)
+    r2 = tensors.clone().requires_grad_(True)
     ref_loss, _, _ = reference(d2, r2, int_map, cam)
     ref_loss[:2].sum().backward()
     torch.testing.assert_close(d.grad, d2.grad)
     torch.testing.assert_close(r.grad, r2.grad, atol=1e-5, rtol=1e-4)
 
 
+def test_structure_tensor_is_direction_sign_invariant():
+    dirs = torch.nn.functional.normalize(torch.randn(3, H, W, device="cuda"), dim=0)
+    signs = torch.where(torch.rand(1, H, W, device="cuda") > 0.5, 1.0, -1.0)
+    torch.testing.assert_close(
+        direction_to_structure_tensor(dirs), direction_to_structure_tensor(dirs * signs)
+    )
+
+
+def test_2d_term_with_large_focal_length_is_not_masked():
+    K = np.array([[2000.0, 0.0, W / 2], [0.0, 2000.0, H / 2], [0.0, 0.0, 1.0]])
+    camera = line_camera_matrices(K, np.eye(4, dtype=np.float32)).to("cuda")
+    depth = torch.ones(H, W, device="cuda")
+    dirs = torch.zeros(3, H, W, device="cuda")
+    dirs[1] = 1.0  # orthogonal to the viewing plane of a horizontal image line
+    int_map = torch.empty(3, H, W, device="cuda")
+    int_map[0] = -1.0
+    int_map[1] = 0.0
+    int_map[2] = 1.0
+    loss = geometry_loss(depth, direction_to_structure_tensor(dirs), int_map, camera)
+    expected = (math.sqrt(1.0 + 1e-6) - 1e-3) / 10.0
+    torch.testing.assert_close(
+        loss[2], torch.full_like(depth, expected), atol=1e-5, rtol=1e-5
+    )
+
+
 def test_orientation_2d_matches_reference():
-    depth, dirs, _, cam = random_view(4)
+    depth, dirs, _, _, cam = random_view(4)
     norm_sq = (dirs * dirs).sum(0, keepdim=True)
     unit = dirs * torch.where(norm_sq > 1e-6, torch.rsqrt(norm_sq), 0.0)
     ref, _, _ = line_angle_reference(depth, unit, cam)
@@ -149,7 +206,7 @@ def test_orientation_2d_matches_reference():
 
 def test_orientation_of_projected_line_is_its_image_angle():
     """The angle is that of the image segment between two points of the 3D line."""
-    depth, dirs, _, cam = random_view(5)
+    depth, dirs, _, _, cam = random_view(5)
     angle = orientation_2d(depth, dirs, cam)
     m_inv, p_col3 = cam.m_inv.cpu().double(), cam.p_col3.cpu().double()
     M = np.linalg.inv(m_inv.numpy())

@@ -15,8 +15,8 @@ The pipeline has three stages, each backed by CUDA kernels in
 
 Besides the color image, the rasterizer renders an auxiliary image
 (:data:`AUX_CHANNELS`) with the alpha-weighted depth, the accumulated opacity,
-the alpha-weighted world space strand direction, the depth distortion and the
-median depth.
+the alpha-weighted world-space direction structure tensor, the depth distortion
+and the median depth.
 """
 
 from __future__ import annotations
@@ -35,7 +35,18 @@ from strand_surfels._backend import _C
 # pylint: disable=abstract-method,arguments-differ
 
 #: Channels of the auxiliary image ``RasterOutput.aux`` (index -> name).
-AUX_CHANNELS = ("depth", "alpha", "dir_x", "dir_y", "dir_z", "distortion", "median_depth")
+AUX_CHANNELS = (
+    "depth",
+    "alpha",
+    "tensor_xx",
+    "tensor_xy",
+    "tensor_xz",
+    "tensor_yy",
+    "tensor_yz",
+    "tensor_zz",
+    "distortion",
+    "median_depth",
+)
 
 
 class SampleBuffer:
@@ -89,12 +100,12 @@ class SampleBuffer:
 class RasterOutput:
     """Result of :func:`rasterize_surfels`.
 
-    Image tensors are channel-first. ``depth`` and ``dirs`` of ``aux`` are
-    alpha-weighted sums; divide by ``alpha`` to obtain the expected values.
+    Image tensors are channel-first. ``depth`` and the direction tensor of
+    ``aux`` are alpha-weighted sums; divide by ``alpha`` for expected values.
     """
 
     render: Float[Tensor, "3 H W"]  # color composited over the background
-    aux: Float[Tensor, "7 H W"]  # see AUX_CHANNELS
+    aux: Float[Tensor, "10 H W"]  # see AUX_CHANNELS
     error_map: Float[Tensor, "1 H W"]  # zeros; its gradient drives the per-surfel error
     radii: Int[Tensor, " N"]  # screen space radius, 0 for culled surfels
     means2d: Float[Tensor, "N 2"]  # screen space centers

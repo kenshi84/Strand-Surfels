@@ -58,7 +58,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, int64_t> intersect_tiles(
 
 // rasterize_fwd.cu ---------------------------------------------------------
 
-// returns render_colors [3, H, W], render_aux [7, H, W],
+// returns render_colors [3, H, W], render_aux [10, H, W],
 // final_state [3, H, W], contributors [2, H, W] int32, max_contrib [n_tiles]
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize_fwd(
     const at::Tensor &means2d,
@@ -76,7 +76,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor> rasterize
     const at::Tensor &bucket_to_tile, // [n_buckets] int32
     const at::Tensor &sampled_state,  // [n_buckets, 3, 256]
     const at::Tensor &sampled_color,  // [n_buckets, 3, 256]
-    const at::Tensor &sampled_aux     // [n_buckets, 4, 256]
+    const at::Tensor &sampled_aux     // [n_buckets, 7, 256]
 );
 
 // rasterize_bwd.cu ---------------------------------------------------------
@@ -106,7 +106,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
     const at::Tensor &final_state,
     const at::Tensor &contributors,
     const at::Tensor &v_render_colors, // [3, H, W]
-    const at::Tensor &v_render_aux,    // [7, H, W]
+    const at::Tensor &v_render_aux,    // [10, H, W]
     const at::Tensor &v_error_map      // [1, H, W]
 );
 
@@ -135,10 +135,10 @@ std::tuple<at::Tensor, at::Tensor> sh_to_color_bwd(
 // geometry_loss.cu -----------------------------------------------------------
 
 // returns the loss map [3, H, W] and, if need_grad, its per-pixel derivatives
-// with respect to depth [H, W] and direction [3, H, W]
+// with respect to depth [H, W] and direction tensor [6, H, W]
 std::tuple<at::Tensor, at::Tensor, at::Tensor> geometry_loss_fwd(
     const at::Tensor &depth,     // [H, W]
-    const at::Tensor &dirs,      // [3, H, W]
+    const at::Tensor &tensors,   // [6, H, W]
     const at::Tensor &int_map,   // [3, H, W]
     const at::Tensor &m_inv,     // [3, 3]
     const at::Tensor &p_col3,    // [3]
@@ -146,11 +146,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> geometry_loss_fwd(
     bool need_grad
 );
 
-// returns v_depth [H, W], v_dirs [3, H, W]
+// returns v_depth [H, W], v_tensors [6, H, W]
 std::tuple<at::Tensor, at::Tensor> geometry_loss_bwd(
     const at::Tensor &int_map,
     const at::Tensor &jac_depth,
-    const at::Tensor &jac_dir,
+    const at::Tensor &jac_tensor,
     const at::Tensor &v_loss // [3, H, W]
 );
 

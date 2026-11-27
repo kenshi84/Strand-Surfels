@@ -95,6 +95,7 @@ __global__ void __launch_bounds__(BUCKET_SIZE) rasterize_bwd_kernel(
     vec3 Tu(0.f), Tv(0.f), Tw(0.f);
     float color[COLOR_DIM] = {0.f};
     float dir[3] = {0.f};
+    float tensor[6] = {0.f};
     if (valid_surfel) {
         g = flatten_ids[range_start + surfel_in_tile];
         xy = vec2(means2d[2 * g], means2d[2 * g + 1]);
@@ -111,6 +112,12 @@ __global__ void __launch_bounds__(BUCKET_SIZE) rasterize_bwd_kernel(
         for (uint32_t c = 0; c < 3; ++c) {
             dir[c] = dirs[3 * g + c];
         }
+        tensor[0] = dir[0] * dir[0];
+        tensor[1] = dir[0] * dir[1];
+        tensor[2] = dir[0] * dir[2];
+        tensor[3] = dir[1] * dir[1];
+        tensor[4] = dir[1] * dir[2];
+        tensor[5] = dir[2] * dir[2];
     }
 
     // gradient accumulators of this lane's surfel
@@ -131,10 +138,10 @@ __global__ void __launch_bounds__(BUCKET_SIZE) rasterize_bwd_kernel(
     float m1_final = 0.f, m2_final = 0.f; // sum(w m) and sum(w m^2) of all surfels
     float rest_color[COLOR_DIM] = {0.f};
     float rest_depth = 0.f, rest_alpha = 0.f, rest_distortion = 0.f;
-    float rest_dir[3] = {0.f};
+    float rest_tensor[6] = {0.f};
     float v_pix_color[COLOR_DIM] = {0.f};
     float v_pix_depth = 0.f, v_pix_alpha = 0.f, v_pix_distortion = 0.f, v_pix_median = 0.f;
-    float v_pix_dir[3] = {0.f};
+    float v_pix_tensor[6] = {0.f};
     float v_pix_error = 0.f;
 
     const uint32_t tile_x0 = (tile_id % tiles_x) * TILE_SIZE;
@@ -157,9 +164,9 @@ __global__ void __launch_bounds__(BUCKET_SIZE) rasterize_bwd_kernel(
         rest_alpha = warp.shfl_up(rest_alpha, 1);
         rest_distortion = warp.shfl_up(rest_distortion, 1);
 #pragma unroll
-        for (uint32_t c = 0; c < 3; ++c) {
-            rest_dir[c] = warp.shfl_up(rest_dir[c], 1);
-            v_pix_dir[c] = warp.shfl_up(v_pix_dir[c], 1);
+        for (uint32_t c = 0; c < 6; ++c) {
+            rest_tensor[c] = warp.shfl_up(rest_tensor[c], 1);
+            v_pix_tensor[c] = warp.shfl_up(v_pix_tensor[c], 1);
         }
         v_pix_depth = warp.shfl_up(v_pix_depth, 1);
         v_pix_alpha = warp.shfl_up(v_pix_alpha, 1);
@@ -197,10 +204,10 @@ __global__ void __launch_bounds__(BUCKET_SIZE) rasterize_bwd_kernel(
             rest_depth = aux[idx] - render_aux[AUX_DEPTH * HW + pix_id];
             rest_alpha = T_final - T;
 #pragma unroll
-            for (uint32_t c = 0; c < 3; ++c) {
-                rest_dir[c] = aux[(1 + c) * TILE_PIXELS + idx] -
-                              render_aux[(AUX_DIR + c) * HW + pix_id];
-                v_pix_dir[c] = v_render_aux[(AUX_DIR + c) * HW + pix_id];
+            for (uint32_t c = 0; c < 6; ++c) {
+                rest_tensor[c] = aux[(1 + c) * TILE_PIXELS + idx] -
+                                 render_aux[(AUX_TENSOR + c) * HW + pix_id];
+                v_pix_tensor[c] = v_render_aux[(AUX_TENSOR + c) * HW + pix_id];
             }
             // distortion of the surfels in front of the bucket minus the total
             const float alpha_final = 1.f - T_final;
@@ -289,13 +296,19 @@ __global__ void __launch_bounds__(BUCKET_SIZE) rasterize_bwd_kernel(
         rest_alpha += w;
         v_alpha += (T + inv_one_minus_alpha * rest_alpha) * v_pix_alpha;
 
-        // strand direction
+        // Sign-invariant strand direction tensor. Backpropagate t t^T to t.
 #pragma unroll
-        for (uint32_t c = 0; c < 3; ++c) {
-            v_dir_acc[c] += w * v_pix_dir[c];
-            rest_dir[c] += w * dir[c];
-            v_alpha += (dir[c] * T + inv_one_minus_alpha * rest_dir[c]) * v_pix_dir[c];
+        for (uint32_t c = 0; c < 6; ++c) {
+            rest_tensor[c] += w * tensor[c];
+            v_alpha += (tensor[c] * T + inv_one_minus_alpha * rest_tensor[c]) *
+                       v_pix_tensor[c];
         }
+        v_dir_acc[0] += w * (2.f * v_pix_tensor[0] * dir[0] +
+                             v_pix_tensor[1] * dir[1] + v_pix_tensor[2] * dir[2]);
+        v_dir_acc[1] += w * (v_pix_tensor[1] * dir[0] +
+                             2.f * v_pix_tensor[3] * dir[1] + v_pix_tensor[4] * dir[2]);
+        v_dir_acc[2] += w * (v_pix_tensor[2] * dir[0] +
+                             v_pix_tensor[4] * dir[1] + 2.f * v_pix_tensor[5] * dir[2]);
 
         // back to the surfel parameters. alpha = opacity * G with
         // G = exp(-rho / 2), rho = min(rho3d, rho2d); the depth depends on the

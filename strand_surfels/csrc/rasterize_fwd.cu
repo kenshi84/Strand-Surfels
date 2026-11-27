@@ -92,7 +92,9 @@ __global__ void __launch_bounds__(TILE_PIXELS) rasterize_fwd_kernel(
     // blending state of this pixel
     float T = 1.0f;                     // transmittance
     float color[COLOR_DIM] = {0.f};     // accumulated color
-    float dir[3] = {0.f};               // accumulated strand direction
+    // Accumulated sign-invariant direction structure tensor t t^T, stored as
+    // xx, xy, xz, yy, yz, zz.
+    float tensor[6] = {0.f};
     float depth_sum = 0.f;              // accumulated depth
     float m1 = 0.f;                     // sum of w * m (normalised depth m)
     float m2 = 0.f;                     // sum of w * m^2
@@ -138,8 +140,8 @@ __global__ void __launch_bounds__(TILE_PIXELS) rasterize_fwd_kernel(
                 float *aux = sampled_aux + bucket * SAMPLED_AUX_DIM * TILE_PIXELS;
                 aux[tr] = depth_sum;
 #pragma unroll
-                for (uint32_t c = 0; c < 3; ++c) {
-                    aux[(1 + c) * TILE_PIXELS + tr] = dir[c];
+                for (uint32_t c = 0; c < 6; ++c) {
+                    aux[(1 + c) * TILE_PIXELS + tr] = tensor[c];
                 }
                 ++bucket;
             }
@@ -197,10 +199,15 @@ __global__ void __launch_bounds__(TILE_PIXELS) rasterize_fwd_kernel(
                 median_depth = depth;
                 median_contributor = contributor;
             }
-#pragma unroll
-            for (uint32_t c = 0; c < 3; ++c) {
-                dir[c] += dirs[3 * g + c] * w;
-            }
+            const float tx = dirs[3 * g];
+            const float ty = dirs[3 * g + 1];
+            const float tz = dirs[3 * g + 2];
+            tensor[0] += tx * tx * w;
+            tensor[1] += tx * ty * w;
+            tensor[2] += tx * tz * w;
+            tensor[3] += ty * ty * w;
+            tensor[4] += ty * tz * w;
+            tensor[5] += tz * tz * w;
 #pragma unroll
             for (uint32_t c = 0; c < COLOR_DIM; ++c) {
                 color[c] += colors[COLOR_DIM * g + c] * w;
@@ -219,8 +226,8 @@ __global__ void __launch_bounds__(TILE_PIXELS) rasterize_fwd_kernel(
         render_aux[AUX_DEPTH * HW + pix_id] = depth_sum;
         render_aux[AUX_ALPHA * HW + pix_id] = 1.0f - T;
 #pragma unroll
-        for (uint32_t c = 0; c < 3; ++c) {
-            render_aux[(AUX_DIR + c) * HW + pix_id] = dir[c];
+        for (uint32_t c = 0; c < 6; ++c) {
+            render_aux[(AUX_TENSOR + c) * HW + pix_id] = tensor[c];
         }
         render_aux[AUX_DISTORTION * HW + pix_id] = distortion;
         render_aux[AUX_MEDIAN * HW + pix_id] = median_depth;

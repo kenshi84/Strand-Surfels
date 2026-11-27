@@ -85,11 +85,11 @@ def ndc(depth: Tensor) -> Tensor:
 def rasterize(
     radii, means2d, depths, ray_transforms, dirs, colors, opacities, pse, background, width, height
 ):
-    """Reference of ``rasterize_fwd``: render [3, H, W], aux [7, H, W], error map [1, H, W]."""
+    """Reference: render [3,H,W], aux [10,H,W], error map [1,H,W]."""
     device = means2d.device
     rect_min, rect_max = tile_rect(means2d.detach(), radii, width, height)
     render = torch.zeros(3, height, width, device=device)
-    aux = torch.zeros(7, height, width, device=device)
+    aux = torch.zeros(10, height, width, device=device)
     error = torch.zeros(1, height, width, device=device)
     n_tx, n_ty = math.ceil(width / TILE), math.ceil(height / TILE)
     order = torch.argsort(depths, stable=True)  # front to back, ties by index
@@ -110,7 +110,7 @@ def rasterize(
             shape = py.shape
             T = torch.ones(shape, device=device)
             color = torch.zeros(3, *shape, device=device)
-            direction = torch.zeros(3, *shape, device=device)
+            tensor = torch.zeros(6, *shape, device=device)
             depth_sum = torch.zeros(shape, device=device)
             m1 = torch.zeros(shape, device=device)
             m2 = torch.zeros(shape, device=device)
@@ -150,13 +150,17 @@ def rasterize(
                 m1 = m1 + m * w
                 m2 = m2 + m * m * w
                 median = torch.where(blend & (T > 0.5), depth, median)
-                direction = direction + dirs[g][:, None, None] * w
+                dx, dy, dz = dirs[g]
+                direction_tensor = torch.stack(
+                    (dx * dx, dx * dy, dx * dz, dy * dy, dy * dz, dz * dz)
+                )
+                tensor = tensor + direction_tensor[:, None, None] * w
                 color = color + colors[g][:, None, None] * w
                 err = err + pse[g] * w
                 T = torch.where(blend, next_T, T)
 
             sl = (slice(None), slice(ys[0], ys[-1] + 1), slice(xs[0], xs[-1] + 1))
             render[sl] = color + T * background[:, None, None]
-            aux[sl] = torch.stack([depth_sum, 1 - T, *direction, distortion, median])
+            aux[sl] = torch.stack([depth_sum, 1 - T, *tensor, distortion, median])
             error[sl] = err[None]
     return render, aux, error

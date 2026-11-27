@@ -41,13 +41,14 @@ constexpr float MIN_ALPHA = 1.0f / 255.0f;
 constexpr float MIN_TRANSMITTANCE = 0.0001f;
 
 // Layout of the auxiliary output image `render_aux` [AUX_DIM, H, W].
-// Depth and direction are alpha-weighted sums (not normalised by alpha).
+// Depth and the six independent components of t t^T are alpha-weighted sums
+// (not normalised by alpha). Tensor order: xx, xy, xz, yy, yz, zz.
 constexpr uint32_t AUX_DEPTH = 0;      // expected depth (camera z)
 constexpr uint32_t AUX_ALPHA = 1;      // accumulated opacity
-constexpr uint32_t AUX_DIR = 2;        // 3 channels: world space strand direction
-constexpr uint32_t AUX_DISTORTION = 5; // depth distortion
-constexpr uint32_t AUX_MEDIAN = 6;     // median depth
-constexpr uint32_t AUX_DIM = 7;
+constexpr uint32_t AUX_TENSOR = 2;     // 6 channels: direction structure tensor
+constexpr uint32_t AUX_DISTORTION = 8; // depth distortion
+constexpr uint32_t AUX_MEDIAN = 9;     // median depth
+constexpr uint32_t AUX_DIM = 10;
 
 // Layout of the per-pixel state kept for the backward pass.
 // final_state [FINAL_STATE_DIM, H, W]: transmittance, sum(w*m), sum(w*m^2)
@@ -59,8 +60,8 @@ constexpr uint32_t CONTRIB_DIM = 2;
 // Per bucket and pixel, the forward pass samples
 //   sampled_state [n_buckets, 3, TILE_PIXELS]: T, sum(w*m), sum(w*m^2)
 //   sampled_color [n_buckets, COLOR_DIM, TILE_PIXELS]: accumulated color
-//   sampled_aux   [n_buckets, 4, TILE_PIXELS]: accumulated depth and direction
+//   sampled_aux   [n_buckets, 7, TILE_PIXELS]: accumulated depth and tensor
 constexpr uint32_t SAMPLED_STATE_DIM = 3;
-constexpr uint32_t SAMPLED_AUX_DIM = 4;
+constexpr uint32_t SAMPLED_AUX_DIM = 7;
 
 } // namespace strand_surfels

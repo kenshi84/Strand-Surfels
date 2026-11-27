@@ -3,10 +3,12 @@
 from strand_surfels.losses.geometry import (
     GEOMETRY_LOSS_CHANNELS,
     LineCamera,
+    direction_to_structure_tensor,
     geometry_loss,
     line_camera_matrices,
     orientation_2d,
     orientation_to_rgb,
+    principal_direction,
 )
 from strand_surfels.losses.labels import (
     LABEL_DEFAULTS,
@@ -24,6 +26,7 @@ __all__ = [
     "LABEL_DEFAULTS",
     "LineCamera",
     "geometry_loss",
+    "direction_to_structure_tensor",
     "label_colors",
     "label_config",
     "label_iou",
@@ -33,6 +36,7 @@ __all__ = [
     "normalized_maps",
     "orientation_2d",
     "orientation_to_rgb",
+    "principal_direction",
     "psnr",
     "render_labels",
     "training_loss",

@@ -12,7 +12,7 @@ Per pixel, with ``I`` the rendered and ``Î`` the ground truth image::
                        + λ_dist distortion)
 
 ``geometry`` is :func:`~strand_surfels.losses.geometry.geometry_loss` of the
-expected (or median) depth and the strand direction. The term
+expected (or median) depth and the strand direction structure tensor. The term
 ``photometric.detach() * error_map`` has no effect on the parameters; its
 gradient with respect to the per-surfel errors gives the densification scores
 (Taming 3DGS). Regularisation weights are zero before their start iteration.
@@ -33,16 +33,19 @@ if TYPE_CHECKING:  # strand_surfels.data imports this package
 
 
 def normalized_maps(out: RasterOutput) -> Dict[str, Tensor]:
-    """Alpha, expected depth, median depth, strand direction (normalised by
-    alpha) and distortion of a rendering, each ``[C, H, W]``."""
+    """Alpha, depths, direction tensor and distortion of a rendering.
+
+    Expected depth and the six direction tensor components are normalised by
+    alpha. Tensor order is ``(xx, xy, xz, yy, yz, zz)``.
+    """
     aux = out.aux
     alpha = aux[1:2]
     return {
         "alpha": alpha,
         "depth": torch.nan_to_num(aux[0:1] / alpha, 0, 0, 0),
-        "median_depth": torch.nan_to_num(aux[6:7], 0, 0),
-        "direction": torch.nan_to_num(aux[2:5] / alpha, 0, 0, 0),
-        "distortion": aux[5:6],
+        "median_depth": torch.nan_to_num(aux[9:10], 0, 0),
+        "direction_tensor": torch.nan_to_num(aux[2:8] / alpha, 0, 0, 0),
+        "distortion": aux[8:9],
     }
 
 
@@ -73,7 +76,7 @@ def training_loss(
     loss += alpha_loss
 
     depth = maps["median_depth"] if cfg["use_median_depths"] else maps["depth"]
-    geom = geometry_loss(depth[0], maps["direction"], view.int_map, view.line_camera)
+    geom = geometry_loss(depth[0], maps["direction_tensor"], view.int_map, view.line_camera)
     geom_depth, geom_dir3d, geom_dir2d = geom * view.hair_mask
 
     # densification scores: gradient of the error-weighted photometric loss

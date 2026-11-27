@@ -29,7 +29,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from strand_surfels.losses.geometry import line_camera_matrices, orientation_2d, orientation_to_rgb
+from strand_surfels.losses.geometry import (
+    line_camera_matrices,
+    orientation_2d,
+    orientation_to_rgb,
+    principal_direction,
+)
 from strand_surfels.rendering import RasterOutput
 
 
@@ -145,8 +150,9 @@ def display_image(
     alpha = aux[1]
     covered = alpha > settings.alpha_threshold
     safe_alpha = torch.where(alpha > 0, alpha, torch.ones_like(alpha))
-    depth = aux[6] if settings.median_depth else aux[0] / safe_alpha
-    dirs = aux[2:5] / safe_alpha
+    depth = aux[9] if settings.median_depth else aux[0] / safe_alpha
+    tensors = aux[2:8] / safe_alpha
+    dirs = principal_direction(tensors)
 
     mode = settings.mode
     if mode in (DisplayMode.RGB, DisplayMode.LABEL):
@@ -162,7 +168,7 @@ def display_image(
         rgb = (d.abs() if settings.direction_abs else (d + 1.0) * 0.5) * alpha[..., None]
     elif mode == DisplayMode.ORIENTATION_2D:
         camera = line_camera_matrices(K, viewmat).to(aux.device)
-        angle = orientation_2d(depth.contiguous(), dirs.contiguous(), camera)
+        angle = orientation_2d(depth.contiguous(), tensors.contiguous(), camera)
         if settings.orientation_hue:
             rgb = hue_to_rgb((angle + 0.5 * math.pi) / math.pi)
         else:

@@ -110,7 +110,7 @@ def test_display_modes():
         if mode == DisplayMode.ORIENTATION_2D:
             angle = orientation_2d(
                 out.aux[0] / alpha.clamp_min(1e-12),
-                out.aux[2:5] / alpha.clamp_min(1e-12),
+                out.aux[2:8] / alpha.clamp_min(1e-12),
                 line_camera_matrices(K, viewmat).to("cuda"),
             )
             expected_red = (torch.cos(angle) + 1) * 0.5 * alpha

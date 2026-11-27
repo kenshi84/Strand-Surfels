@@ -8,7 +8,8 @@ The first stage of the pipeline (see the README) reconstructs, per view, an
 * all other hair pixels store ``(-1, angle, confidence)``: the 2D strand
   orientation measured in the image and its confidence.
 
-:func:`geometry_loss` compares the rendered depth and strand direction with
+:func:`geometry_loss` compares the rendered depth and sign-invariant direction
+structure tensor with
 these measurements and returns a per-pixel loss map with three channels
 (:data:`GEOMETRY_LOSS_CHANNELS`): the 3D depth and direction errors on the
 consistent pixels and the confidence weighted 2D orientation error of the
@@ -110,25 +111,51 @@ def line_camera_matrices(K: np.ndarray, viewmat: np.ndarray) -> LineCamera:
 
 class _GeometryLoss(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, depth, dirs, int_map, m_inv, p_col3, line_proj):
+    def forward(ctx, depth, tensors, int_map, m_inv, p_col3, line_proj):
         need_grad = ctx.needs_input_grad[0] or ctx.needs_input_grad[1]
-        loss, jac_depth, jac_dir = _C.geometry_loss_fwd(
-            depth, dirs, int_map, m_inv, p_col3, line_proj, need_grad
+        loss, jac_depth, jac_tensor = _C.geometry_loss_fwd(
+            depth, tensors, int_map, m_inv, p_col3, line_proj, need_grad
         )
         if need_grad:
-            ctx.save_for_backward(int_map, jac_depth, jac_dir)
+            ctx.save_for_backward(int_map, jac_depth, jac_tensor)
         return loss
 
     @staticmethod
     def backward(ctx, v_loss):
-        int_map, jac_depth, jac_dir = ctx.saved_tensors
-        v_depth, v_dirs = _C.geometry_loss_bwd(int_map, jac_depth, jac_dir, v_loss.contiguous())
-        return v_depth, v_dirs, None, None, None, None
+        int_map, jac_depth, jac_tensor = ctx.saved_tensors
+        v_depth, v_tensors = _C.geometry_loss_bwd(
+            int_map, jac_depth, jac_tensor, v_loss.contiguous()
+        )
+        return v_depth, v_tensors, None, None, None, None
+
+
+def direction_to_structure_tensor(
+    dirs: Float[Tensor, "3 H W"],
+) -> Float[Tensor, "6 H W"]:
+    """Convert directions to ``t t^T`` in ``(xx, xy, xz, yy, yz, zz)`` order."""
+    x, y, z = dirs.unbind(0)
+    return torch.stack((x * x, x * y, x * z, y * y, y * z, z * z))
+
+
+@torch.no_grad()
+def principal_direction(
+    tensors: Float[Tensor, "6 H W"],
+) -> Float[Tensor, "3 H W"]:
+    """Recover a representative (sign-ambiguous) principal direction.
+
+    This is intended for visualisation only. Training losses operate directly
+    on the structure tensor and therefore never choose an arbitrary sign.
+    """
+    xx, xy, xz, yy, yz, zz = tensors.unbind(0)
+    matrix = torch.stack((xx, xy, xz, xy, yy, yz, xz, yz, zz), dim=-1)
+    matrix = matrix.reshape(*xx.shape, 3, 3)
+    dirs = torch.linalg.eigh(matrix).eigenvectors[..., -1].movedim(-1, 0)
+    return torch.where((xx + yy + zz).unsqueeze(0) > 1e-6, dirs, 0.0)
 
 
 def geometry_loss(
     depth: Float[Tensor, "H W"],
-    dirs: Float[Tensor, "3 H W"],
+    tensors: Float[Tensor, "6 H W"],
     int_map: Float[Tensor, "3 H W"],
     camera: LineCamera,
 ) -> Float[Tensor, "3 H W"]:
@@ -137,27 +164,36 @@ def geometry_loss(
     Args:
         depth: rendered depth (expected depth, i.e. normalised by alpha, or
             median depth).
-        dirs: rendered world space strand direction, normalised by alpha.
+        tensors: rendered world-space direction structure tensor, normalised
+            by alpha, in ``(xx, xy, xz, yy, yz, zz)`` order.
         int_map: int map of the view (see the module documentation).
         camera: matrices of the view on the same device.
 
-    Gradients flow to ``depth`` (3D depth term) and ``dirs`` (3D direction and
-    2D orientation terms). Weighting, masking and reduction are left to the
-    caller.
+    Gradients flow to ``depth`` and ``tensors``. Both direction terms are sign
+    invariant; no principal eigenvector is selected during training.
     """
-    return _GeometryLoss.apply(depth.contiguous(), dirs.contiguous(), int_map.contiguous(), *camera)
+    return _GeometryLoss.apply(
+        depth.contiguous(), tensors.contiguous(), int_map.contiguous(), *camera
+    )
 
 
 @torch.no_grad()
 def orientation_2d(
-    depth: Float[Tensor, "H W"], dirs: Float[Tensor, "3 H W"], camera: LineCamera
+    depth: Float[Tensor, "H W"], dirs_or_tensors: Tensor, camera: LineCamera
 ) -> Float[Tensor, "H W"]:
     """Image space orientation angle in ``[-pi/2, pi/2]`` of the rendered strands.
 
-    Each pixel's strand (through the back-projected pixel along ``dirs``) is
+    ``dirs_or_tensors`` may be directions ``[3,H,W]`` or structure tensors
+    ``[6,H,W]``. For tensors, a representative principal eigenvector is used
+    only for this visualisation helper. Each pixel's strand is
     projected into the image; the angle is the one of the resulting 2D line,
     in the convention of the measured orientations in the int maps.
     """
+    dirs = (
+        principal_direction(dirs_or_tensors)
+        if dirs_or_tensors.shape[0] == 6
+        else dirs_or_tensors
+    )
     return _C.orientation_2d(depth.contiguous(), dirs.contiguous(), *camera)
 
 
